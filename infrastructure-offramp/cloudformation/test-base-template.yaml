@@ -1,0 +1,27 @@
+Description: 'Base template'
+Mappings:
+  AccountIDtoEnvParametersMap:
+    '058234065395-FromBase1':
+      SSHsecuritygroup: sg-xxxxxxx
+      Environment: dev
+      Moniker: ADPOFRMP-D-UE1
+      jarS3bucket: 'com.autodesk.adp.dev.us-east-1.blk'
+    '261991560536-FromBase2':
+      SSHsecuritygroup: sg-0f072d669df633bb4
+      Environment: stg
+      Moniker: ADPOFRMP-S-UE1
+      jarS3bucket: 'com.autodesk.adp.stg.us-east-1.blk'
+    '204522078340-FromBase3':
+      SSHsecuritygroup: sg-7764f03d
+      Environment: prd
+      Moniker: ADPOFRMP-P-UE1
+      jarS3bucket: 'com.autodesk.adp.prd.us-east-1.blk'
+Resources:
+  Resource1FromBase:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: BaseBucketName1
+  Resource2FromBase:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: BaseBucketName2

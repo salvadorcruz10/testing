@@ -1,0 +1,9 @@
+Mappings:
+  Production:
+    us-east-1:
+      MapFromExtension: 'anyvalue'
+Resources:
+  Resource1FromExtension:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: 'NameBucketDataScienceExtension'

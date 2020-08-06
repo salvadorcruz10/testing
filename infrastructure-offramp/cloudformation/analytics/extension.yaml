@@ -1,0 +1,10 @@
+Mappings:
+  Production:
+    us-east-1:
+      MapFromExtension: 'ami-ds-08f3d892de259504d'
+Resources:
+  Resource1FromExtension:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: 'NameBucket-Analytics'
+  

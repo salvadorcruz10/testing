@@ -1,0 +1,1158 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  Team:
+    Type: String
+    Description: Team associated with the offramp. Typical format is <team>-analytics such as dcp-analytics, sonar-analytics, and daa-adv-analytics.
+  OfframpTagName:
+    Type: String
+    Description: Tag name associated with the offramp. Typical format is <team>-offramp such as daa-adp-tool-svc-offramp.
+  OfframpBucket:
+    Type: String
+    Description: Offramp S3 bucket suffix used for the new offramp bucket. Typical format is the team name with periods as separators such as dcp.analytics
+Mappings:
+  AccountIDtoEnvParametersMap:
+    '058234065395':
+      SSHsecuritygroup: sg-xxxxxxx
+      Environment: dev
+      Moniker: ADPOFRMP-D-UE1
+      jarS3bucket: 'com.autodesk.adp.dev.us-east-1.blk'
+    '261991560536':
+      SSHsecuritygroup: sg-0f072d669df633bb4
+      Environment: stg
+      Moniker: ADPOFRMP-S-UE1
+      jarS3bucket: 'com.autodesk.adp.stg.us-east-1.blk'
+    '204522078340':
+      SSHsecuritygroup: sg-7764f03d
+      Environment: prd
+      Moniker: ADPOFRMP-P-UE1
+      jarS3bucket: 'com.autodesk.adp.prd.us-east-1.blk'
+Resources:
+  OfframpTeamBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub
+        - 'com.autodesk.adp.${env}.us-east-1.offramp.${bucketsuffix}'
+        - env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+          bucketsuffix: !Ref OfframpBucket
+  OfframpTeamBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    DependsOn: OfframpTeamBucket
+    Properties:
+      Bucket: !Ref OfframpTeamBucket
+      PolicyDocument:
+        Id: Policy
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowListAndGetOnBucket
+            Action:
+              - 's3:GetBucketLocation'
+              - 's3:ListBucket'
+              - 's3:GetObject'
+            Effect: Allow
+            Principal:
+              AWS:
+              - Fn::GetAtt:
+                - APIGatewayExecutionRole
+                - Arn
+              - Fn::GetAtt:
+                - CFNExecutionRole
+                - Arn
+              - Fn::GetAtt:
+                - EC2ExecutionRole
+                - Arn
+              - Fn::GetAtt:
+                - GlueExecutionRole
+                - Arn
+              - Fn::GetAtt:
+                - LambdaExecutionRole
+                - Arn
+              - Fn::GetAtt:
+                - OfframpLoginRole
+                - Arn
+              - Fn::GetAtt:
+                - SagemakerExecutionRole
+                - Arn
+            Resource:
+              - !Sub
+                - 'arn:aws:s3:::com.autodesk.adp.${env}.us-east-1.offramp.${bucketsuffix}'
+                - env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+                  bucketsuffix: !Ref OfframpBucket
+              - !Sub
+                - 'arn:aws:s3:::com.autodesk.adp.${env}.us-east-1.offramp.${bucketsuffix}/*'
+                - env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+                  bucketsuffix: !Ref OfframpBucket
+  OfframpLoginRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AWSCodeBuildDeveloperAccess'
+        - 'arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: SAMLv2
+            Effect: Allow
+            Principal:
+              Federated: !Sub
+                - 'arn:aws:iam::${accountid}:saml-provider/adsk-saml'
+                - accountid: !Ref 'AWS::AccountId'
+            Action: 'sts:AssumeRoleWithSAML'
+            Condition:
+              StringEquals:
+                'SAML:aud': 'https://signin.aws.amazon.com/saml'
+          - Sid: SAMLv1
+            Effect: Allow
+            Principal:
+              Federated: !Sub
+                - 'arn:aws:iam::${accountid}:saml-provider/adsk-saml-v2'
+                - accountid: !Ref 'AWS::AccountId'
+            Action: 'sts:AssumeRoleWithSAML'
+            Condition:
+              StringEquals:
+                'SAML:aud': 'https://signin.aws.amazon.com/saml'
+      Path: /
+      RoleName: !Sub
+        - 'adp-${env}-${tag}'
+        - tag: !Ref OfframpTagName
+          env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+  EC2ExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      RoleName: !Sub
+        - 'adp-${tag}-ec2-instance-profile-role'
+        - tag: !Ref OfframpTagName
+  SagemakerExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - 'sagemaker.amazonaws.com'
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSageMakerFullAccess'
+      Path: /
+      RoleName: !Sub
+        - 'adp-${tag}-sagemaker-execution-role'
+        - tag: !Ref OfframpTagName
+  APIGatewayExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      RoleName: !Sub
+        - 'adp-${tag}-apigateway-execution-role'
+        - tag: !Ref OfframpTagName
+  CFNExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - cloudformation.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      RoleName: !Sub
+        - 'adp-${tag}-cfn-execution-role'
+        - tag: !Ref OfframpTagName
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      RoleName: !Sub
+        - 'adp-${tag}-lambda-execution-role'
+        - tag: !Ref OfframpTagName
+  GlueExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - glue.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      RoleName: !Sub
+        - 'adp-${tag}-glue-execution-role'
+        - tag: !Ref OfframpTagName
+  EC2InstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      InstanceProfileName: !Sub
+        - 'adp-${tag}-ec2-instance-profile'
+        - tag: !Ref OfframpTagName
+      Path: /
+      Roles:
+        - !Ref EC2ExecutionRole
+    DependsOn: OfframpLoginRole
+  SSMAccessPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub
+        - '${tag}-${env}-ssm-policy'
+        - tag: !Ref OfframpTagName
+          env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+      Path: '/'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPutParameterAndAddTags
+            Effect: Allow
+            Action:
+              - 'ssm:PutParameter'
+              - 'ssm:AddTags*'
+            Resource: !Sub
+              - 'arn:aws:ssm:us-east-1:${accountid}:parameter/${tag}*'
+              - accountid: !Ref 'AWS::AccountId'
+                tag: !Ref OfframpTagName
+          - Sid: AllowParametersToBeRetrievedAndDeleted
+            Effect: Allow
+            Action:
+              - 'ssm:GetParameterHistory'
+              - 'ssm:GetParametersByPath'
+              - 'ssm:GetParameters'
+              - 'ssm:GetParameter'
+              - 'ssm:DeleteParameter'
+              - 'ssm:DeleteParameters'
+            Resource: !Sub
+              - 'arn:aws:ssm:us-east-1:${accountid}:parameter/${tag}*'
+              - accountid: !Ref 'AWS::AccountId'
+                tag: !Ref OfframpTagName
+            Condition:
+              StringEquals:
+                'ssm:resourceTag/adsk:moniker': !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Moniker]
+                'ssm:resourceTag/adsk:team': !Ref Team
+          - Sid: AllowDescribeOnParameters
+            Effect: Allow
+            Action:
+              - 'ssm:DescribeParameters'
+              - 'ssm:ListTagsForResource'
+            Resource: '*'
+          - Sid: AllowListAliases
+            Effect: Allow
+            Action: 'kms:ListAliases'
+            Resource: '*'
+      Roles:
+        - !Ref OfframpLoginRole
+        - !Ref EC2ExecutionRole
+        - !Ref SagemakerExecutionRole
+        - !Ref LambdaExecutionRole
+        - !Ref GlueExecutionRole
+        - !Ref CFNExecutionRole
+  S3AccessPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub
+        - '${tag}-${env}-s3-access-policy'
+        - tag: !Ref OfframpTagName
+          env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: GreenS3BucketAccess
+            Action:
+              - 's3:Get*'
+              - 's3:List*'
+              - 's3:Head*'
+            Effect: Allow
+            Resource:
+              - !Sub
+                - 'arn:aws:s3:::com.autodesk.adp.${env}.us-east-1.grn/*'
+                - env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+              - !Sub
+                - 'arn:aws:s3:::com.autodesk.adp.${env}.us-east-1.grn'
+                - env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+          - Sid: ListAllbuckets
+            Action:
+              - 's3:ListAllMyBuckets'
+            Effect: Allow
+            Resource: '*'
+          - Sid: SpecificBucketAccess
+            Action:
+              - 's3:*'
+            Effect: Allow
+            Resource:
+              - !Sub
+                - 'arn:aws:s3:::com.autodesk.adp.${env}.us-east-1.offramp.${bucketsuffix}'
+                - env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+                  bucketsuffix: !Ref OfframpBucket
+              - !Sub
+                - 'arn:aws:s3:::com.autodesk.adp.${env}.us-east-1.offramp.${bucketsuffix}/*'
+                - env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+                  bucketsuffix: !Ref OfframpBucket
+              - 'arn:aws:s3:::cf-templates*'
+      Roles:
+        - !Ref OfframpLoginRole
+        - !Ref EC2ExecutionRole
+        - !Ref SagemakerExecutionRole
+        - !Ref LambdaExecutionRole
+        - !Ref GlueExecutionRole
+        - !Ref CFNExecutionRole
+  SagemakerAccessPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub
+        - '${tag}-${env}-sagemakeraccess-policy'
+        - tag: !Ref OfframpTagName
+          env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+      Path: '/'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: SagemakerAccess
+            Effect: Allow
+            Action:
+              - 'sagemaker:Delete*'
+              - 'sagemaker:Invoke*'
+              - 'sagemaker:Stop*'
+              - 'sagemaker:Update*'
+            Resource:
+              - !Sub
+                - 'arn:aws:sagemaker:us-east-1:${accountid}:notebook-instance/${tag}*'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+              - !Sub
+                - 'arn:aws:sagemaker:us-east-1:${accountid}:training-job/${tag}*'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+              - !Sub
+                - 'arn:aws:sagemaker:us-east-1:${accountid}:model/${tag}*'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+              - !Sub
+                - 'arn:aws:sagemaker:us-east-1:${accountid}:endpoint/${tag}*'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+              - !Sub
+                - 'arn:aws:sagemaker:us-east-1:${accountid}:endpoint-config/${tag}*'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+              - !Sub
+                - 'arn:aws:sagemaker:us-east-1:${accountid}:hyper-parameter-tuning-job/${tag}*'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+              - !Sub
+                - 'arn:aws:sagemaker:us-east-1:${accountid}:notebook-instance-lifecycle-config/${tag}*'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+            Condition:
+              StringEquals:
+                'sagemaker:resourceTag/adsk:moniker': !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Moniker]
+                'sagemaker:resourceTag/adsk:team': !Ref Team
+          - Sid: SagemakerTransformJobAccess
+            Effect: Allow
+            Action:
+              - 'sagemaker:Delete*'
+              - 'sagemaker:Invoke*'
+              - 'sagemaker:Stop*'
+              - 'sagemaker:Update*'
+            Resource:
+              - !Sub
+                - 'arn:aws:sagemaker:us-east-1:${accountid}:transform-job/${tag}*'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+          - Sid: SagemakerListAndDescribeAccess
+            Effect: Allow
+            Action:
+              - 'sagemaker:List*'
+              - 'sagemaker:Describe*'
+            Resource: '*'
+          - Sid: SagemakerCreateAccess
+            Effect: Allow
+            Action:
+              - 'sagemaker:CreateEndpointConfig'
+              - 'sagemaker:CreateHyperParameterTuningJob'
+              - 'sagemaker:CreateModel'
+              - 'sagemaker:CreateNotebookInstance'
+              - 'sagemaker:CreateNotebookInstanceLifecycleConfig'
+              - 'sagemaker:CreateTrainingJob'
+              - 'sagemaker:CreateTransformJob'
+            Resource: '*'
+            Condition:
+              StringLike:
+                'aws:RequestTag/Name': !Sub
+                  - '${tag}*'
+                  - tag: !Ref OfframpTagName
+          - Sid: SagemakerCreateEndpointAccess
+            Effect: Allow
+            Action:
+              - 'sagemaker:CreateEndpoint'
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - 'sagemaker:StartNotebookInstance'
+              - 'sagemaker:CreatePresignedNotebookInstanceUrl'
+            Resource: !Sub
+              - 'arn:aws:sagemaker:us-east-1:${accountid}:notebook-instance/${tag}*'
+              - accountid: !Ref 'AWS::AccountId'
+                tag: !Ref OfframpTagName
+            Condition:
+              StringEquals:
+                'sagemaker:resourceTag/adsk:moniker': !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Moniker]
+                'sagemaker:resourceTag/adsk:team': !Ref Team
+          - Effect: Allow
+            Action:
+              - 'sagemaker:AddTags'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'sagemaker:resourceTag/adsk:moniker': !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Moniker]
+                'sagemaker:resourceTag/adsk:team': !Ref Team
+      Roles:
+        - !Ref OfframpLoginRole
+        - !Ref CFNExecutionRole
+  LambdaPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub
+        - '${tag}-${env}-lambda-policy'
+        - tag: !Ref OfframpTagName
+          env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+      Path: '/'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: UseFunctions
+            Effect: Allow
+            Action:
+              - 'lambda:TagResource'
+              - 'lambda:UpdateEventSourceMapping'
+              - 'lambda:ListFunctions'
+              - 'lambda:ListVersionsByFunction'
+              - 'lambda:GetEventSourceMapping'
+              - 'lambda:GetFunction'
+              - 'lambda:ListAliases'
+              - 'lambda:GetAccountSettings'
+              - 'lambda:GetFunctionConfiguration'
+              - 'lambda:UpdateAlias'
+              - 'lambda:ListTags'
+              - 'lambda:ListEventSourceMappings'
+              - 'lambda:GetAlias'
+              - 'lambda:GetPolicy'
+              - 'lambda:GetResources'
+              - 'lambda:AddPermission'
+            Resource: '*'
+          - Sid: AllowGetResources
+            Effect: Allow
+            Action: 'tag:GetResources'
+            Resource: '*'
+          - Sid: AllowCreateFunction
+            Effect: Allow
+            Action: 'lambda:CreateFunction'
+            Resource:
+              - !Sub
+                - 'arn:aws:lambda:us-east-1:${accountid}:function:${tag}*'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+          - Sid: AllowUpdateInvokeDeleteFunction
+            Effect: Allow
+            Action:
+              - 'lambda:DeleteFunction'
+              - 'lambda:InvokeFunction'
+              - 'lambda:UpdateFunctionCode'
+              - 'lambda:UpdateFunctionConfiguration'
+            Resource:
+              - !Sub
+                - 'arn:aws:lambda:us-east-1:${accountid}:function:${tag}*'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+      Roles:
+        - !Ref OfframpLoginRole
+        - !Ref LambdaExecutionRole
+        - !Ref CFNExecutionRole
+        - !Ref GlueExecutionRole
+  IAMPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub
+        - '${tag}-${env}-iam-policy'
+        - tag: !Ref OfframpTagName
+          env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+      Path: '/'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: IAMAccess
+            Effect: Allow
+            Action:
+              - 'iam:GetAccessKeyLastUsed'
+              - 'iam:GetAccountPasswordPolicy'
+              - 'iam:GetAccountSummary'
+              - 'iam:GetInstanceProfile'
+              - 'iam:GetRole'
+              - 'iam:GetRolePolicy'
+              - 'iam:GetServerCertificate'
+              - 'iam:GetServiceLastAccessedDetails'
+              - 'iam:GetServiceLastAccessedDetailsWithEntities'
+              - 'iam:GetUser'
+              - 'iam:GetUserPolicy'
+              - 'iam:GetPolicyVersion'
+              - 'iam:GetPolicy'
+              - 'iam:List*'
+            Resource: '*'
+          - Sid: IAMPassRoleAccess
+            Effect: Allow
+            Action:
+              - 'iam:PassRole'
+            Resource:
+              - !Sub
+                - 'arn:aws:iam::${accountid}:role/adp-${tag}-ec2-instance-profile-role'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+              - !Sub
+                - 'arn:aws:iam::${accountid}:role/adp-${tag}-cfn-execution-role'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+              - !Sub
+                - 'arn:aws:iam::${accountid}:role/adp-${tag}-lambda-execution-role'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+              - !Sub
+                - 'arn:aws:iam::${accountid}:role/adp-${tag}-glue-execution-role'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+              - !Sub
+                - 'arn:aws:iam::${accountid}:role/adp-${tag}-apigateway-execution-role'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+              - !Sub
+                - 'arn:aws:iam::${accountid}:role/adp-${tag}-sagemaker-execution-role'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+      Roles:
+        - !Ref OfframpLoginRole
+        - !Ref EC2ExecutionRole
+        - !Ref CFNExecutionRole
+        - !Ref LambdaExecutionRole
+        - !Ref GlueExecutionRole
+        - !Ref APIGatewayExecutionRole
+        - !Ref SagemakerExecutionRole
+  EC2Policy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub
+        - '${tag}-${env}-ec2-policy'
+        - tag: !Ref OfframpTagName
+          env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+      Path: '/'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: DescribeInstances
+            Effect: Allow
+            Action:
+              - 'ec2:Describe*'
+              - 'ec2:GetConsole*'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'ec2:Region': us-east-1
+          - Sid: LaunchAndRunInstances
+            Effect: Allow
+            Action:
+              - 'ec2:RunInstances'
+              - 'ec2:CreateVolume'
+            Resource:
+              - !Sub
+                - 'arn:aws:ec2:us-east-1:${accountid}:instance/*'
+                - accountid: !Ref 'AWS::AccountId'
+              - !Sub
+                - 'arn:aws:ec2:us-east-1:${accountid}:volume/*'
+                - accountid: !Ref 'AWS::AccountId'
+            Condition:
+              StringLike:
+                'aws:RequestTag/Name': !Sub
+                  - '${tag}*'
+                  - tag: !Ref OfframpTagName
+          - Sid: AllowAddingTagsWhenLaunchingInstance
+            Effect: Allow
+            Action: 'ec2:CreateTags'
+            Resource:
+              - !Sub
+                - 'arn:aws:ec2:us-east-1:${accountid}:instance/*'
+                - accountid: !Ref 'AWS::AccountId'
+              - !Sub
+                - 'arn:aws:ec2:us-east-1:${accountid}:volume/*'
+                - accountid: !Ref 'AWS::AccountId'
+            Condition:
+              StringEquals:
+                'ec2:CreateAction': RunInstances
+          - Sid: ManageInstancesForThisOfframp
+            Effect: Allow
+            Action:
+              - 'ec2:TerminateInstances'
+              - 'ec2:StartInstances'
+              - 'ec2:StopInstances'
+            Resource: !Sub
+                - 'arn:aws:ec2:us-east-1:${accountid}:instance/*'
+                - accountid: !Ref 'AWS::AccountId'
+            Condition:
+              StringEquals:
+                'ec2:resourceTag/adsk:moniker': !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Moniker]
+                'ec2:resourceTag/adsk:team': !Ref Team
+          - Sid: AllowCreateAutoscaling
+            Effect: Allow
+            Action:
+              - 'autoscaling:Create*'
+            Resource: '*'
+          - Sid: AllowManageAutoscaling
+            Effect: Allow
+            Action:
+              - 'autoscaling:Attach*'
+              - 'autoscaling:Exit*'
+              - 'autoscaling:Put*'
+              - 'autoscaling:Detach*'
+              - 'autoscaling:CompleteLifecycleAction'
+              - 'autoscaling:Enable*'
+              - 'autoscaling:Suspend*'
+              - 'autoscaling:Delete*'
+              - 'autoscaling:Disable*'
+              - 'autoscaling:Resume*'
+              - 'autoscaling:Update*'
+              - 'autoscaling:Set*'
+              - 'autoscaling:Terminate*'
+              - 'autoscaling:Enter*'
+              - 'autoscaling:Record*'
+            Resource: '*'
+            Condition:
+              StringLike:
+                'autoscaling:ResourceTag/Name': !Sub
+                  - '${tag}*'
+                  - tag: !Ref OfframpTagName
+          - Sid: AllowDescribe
+            Effect: Allow
+            Action:
+              - 'autoscaling:Describe*'
+              - 'elasticloadbalancing:Describe*'
+              - 'elasticfilesystem:Describe*'
+            Resource: '*'
+          - Sid: LaunchInstances
+            Effect: Allow
+            Action: 'ec2:RunInstances'
+            Resource:
+              - 'arn:aws:ec2:us-east-1::image/ami-*'
+              - !Sub
+                - 'arn:aws:ec2:us-east-1:${accountid}:subnet/*'
+                - accountid: !Ref 'AWS::AccountId'
+              - 'arn:aws:ec2:us-east-1::snapshot/*'
+              - !Sub
+                - 'arn:aws:ec2:us-east-1:${accountid}:launch-template/*'
+                - accountid: !Ref 'AWS::AccountId'
+              - !Sub
+                - 'arn:aws:ec2:us-east-1:${accountid}:network-interface/*'
+                - accountid: !Ref 'AWS::AccountId'
+              - !Sub
+                - 'arn:aws:ec2:us-east-1:${accountid}:key-pair/${tag}-${env}'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+                  env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+              - !Sub
+                - 'arn:aws:ec2:us-east-1:${accountid}:security-group/${securitygroup}'
+                - accountid: !Ref 'AWS::AccountId'
+                  securitygroup: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", SSHsecuritygroup]
+          - Sid: AllowImageMaintenance
+            Effect: Allow
+            Action:
+              - 'ec2:ResetImageAttribute'
+              - 'ec2:DeregisterImage'
+              - 'ec2:ModifyNetworkInterfaceAttribute'
+              - 'ec2:RegisterImage'
+              - 'ec2:DeleteNetworkInterface'
+              - 'ec2:CreateImage'
+              - 'ec2:AssociateIamInstanceProfile'
+              - 'ec2:ModifyImageAttribute'
+              - 'ec2:CreateNetworkInterface'
+              - 'ec2:CreateLaunchTemplate'
+              - 'sts:DecodeAuthorizationMessage'
+              - 'ec2:DescribeImage*'
+              - 'ec2:AttachNetworkInterface'
+              - 'ec2:*LaunchTemplate*'
+              - 'ec2:ImportImage'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'ec2:Region': 'us-east-1'
+      Roles:
+        - !Ref OfframpLoginRole
+        - !Ref EC2ExecutionRole
+        - !Ref CFNExecutionRole
+        - !Ref SagemakerExecutionRole
+  CloudwatchPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub
+        - '${tag}-${env}-cloudwatch-policy'
+        - tag: !Ref OfframpTagName
+          env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+      Path: '/'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: CloudwatchAccess
+            Action:
+              - 'autoscaling:DescribeAutoScalingGroups'
+              - 'cloudwatch:Describe*'
+              - 'cloudwatch:Get*'
+              - 'cloudwatch:List*'
+              - 'cloudwatch:Put*'
+              - 'logs:Get*'
+              - 'logs:Describe*'
+              - 'logs:Create*'
+              - 'logs:Put*'
+              - 'events:List*'
+              - 'events:Describe*'
+              - 'events:Enable*'
+              - 'events:Put*'
+              - 'events:Test*'
+              - 'sns:*'
+              - 'swf:Describe*'
+              - 'swf:ReferenceAction*'
+              - 'swf:RegisterAction'
+              - 'swf:RegisterDomain'
+              - 'swf:UpdateAction'
+              - 'ses:*'
+            Effect: Allow
+            Resource: '*'
+      Roles:
+        - !Ref OfframpLoginRole
+        - !Ref EC2ExecutionRole
+        - !Ref SagemakerExecutionRole
+        - !Ref LambdaExecutionRole
+        - !Ref GlueExecutionRole
+        - !Ref CFNExecutionRole
+  EcrPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub
+        - '${tag}-${env}-ecr-policy'
+        - tag: !Ref OfframpTagName
+          env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+      Path: '/'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: EcrAccess
+            Action:
+              - 'ecr:CreateRepository'
+              - 'ecr:GetLifecyclePolicyPreview'
+              - 'ecr:GetDownloadUrlForLayer'
+              - 'ecr:GetAuthorizationToken'
+              - 'ecr:ListTagsForResource'
+              - 'ecr:UploadLayerPart'
+              - 'ecr:ListImages'
+              - 'ecr:BatchGetImage'
+              - 'ecr:CompleteLayerUpload'
+              - 'ecr:DescribeImages'
+              - 'ecr:TagResource'
+              - 'ecr:DescribeRepositories'
+              - 'ecr:StartLifecyclePolicyPreview'
+              - 'ecr:BatchCheckLayerAvailability'
+              - 'ecr:GetRepositoryPolicy'
+              - 'ecr:GetLifecyclePolicy'
+            Effect: Allow
+            Resource: '*'
+          - Sid: EcrAccess1
+            Action:
+              - 'ecr:PutImageTagMutability'
+              - 'ecr:PutLifecyclePolicy'
+              - 'ecr:BatchDeleteImage'
+              - 'ecr:UploadLayerPart'
+              - 'ecr:DeleteLifecyclePolicy'
+              - 'ecr:DeleteRepository'
+              - 'ecr:PutImage'
+              - 'ecr:UntagResource'
+              - 'ecr:SetRepositoryPolicy'
+              - 'ecr:CompleteLayerUpload'
+              - 'ecr:StartLifecyclePolicyPreview'
+              - 'ecr:DeleteRepositoryPolicy'
+              - 'ecr:InitiateLayerUpload'
+            Effect: Allow
+            Resource: !Sub
+              - 'arn:aws:ecr:us-east-1:${accountid}:repository/${tag}*'
+              - accountid: !Ref 'AWS::AccountId'
+                tag: !Ref OfframpTagName
+      Roles:
+        - !Ref OfframpLoginRole
+        - !Ref EC2ExecutionRole
+        - !Ref SagemakerExecutionRole
+        - !Ref LambdaExecutionRole
+        - !Ref GlueExecutionRole
+        - !Ref CFNExecutionRole
+  GlueAccessPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub
+        - '${tag}-${env}-glueaccess-policy'
+        - tag: !Ref OfframpTagName
+          env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+      Path: '/'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowGlueAccess
+            Effect: Allow
+            Action:
+              - 'glue:Get*'
+              - 'glue:BatchGetCrawlers'
+              - 'glue:BatchGetDevEndPoints'
+              - 'glue:BatchGetJobs'
+              - 'glue:BatchGetTriggers'
+              - 'glue:CreateCrawler'
+              - 'glue:CreateJob'
+              - 'glue:CreatePartition'
+              - 'glue:CreateScript'
+              - 'glue:CreateTable'
+              - 'glue:CreateTrigger'
+              - 'glue:DeletePartition'
+              - 'glue:DeleteTable'
+              - 'glue:ListCrawlers'
+              - 'glue:ListDevEndPoints'
+              - 'glue:ListJobs'
+              - 'glue:ListTriggers'
+              - 'glue:UpdateTable'
+              - 'glue:ResetJobBookmark'
+            Resource: '*'
+          - Sid: AllowDeleteActionsWithRestrictions
+            Effect: Allow
+            Action:
+              - 'glue:DeleteCrawler'
+              - 'glue:DeleteJob'
+              - 'glue:DeleteTrigger'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'glue:resourceTag/adsk:moniker': !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Moniker]
+                'glue:resourceTag/adsk:team': !Ref Team
+          - Sid: AllowStartActionsWithRestrictions
+            Effect: Allow
+            Action:
+              - 'glue:StartCrawler'
+              - 'glue:StartTrigger'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'glue:resourceTag/adsk:moniker': !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Moniker]
+                'glue:resourceTag/adsk:team': !Ref Team
+          - Sid: AllowStopActionsWithRestrictions
+            Effect: Allow
+            Action:
+              - 'glue:StopCrawler'
+              - 'glue:StopTrigger'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'glue:resourceTag/adsk:moniker': !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Moniker]
+                'glue:resourceTag/adsk:team': !Ref Team
+          - Sid: AllowUpdateActionsWithRestrictions
+            Effect: Allow
+            Action:
+              - 'glue:UpdateCrawler'
+              - 'glue:UpdateJob'
+              - 'glue:UpdateTrigger'
+            Resource: '*'
+            Condition:
+              StringEquals:
+                'glue:resourceTag/adsk:moniker': !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Moniker]
+                'glue:resourceTag/adsk:team': !Ref Team
+          - Effect: Allow
+            Action:
+              - 's3:CreateBucket'
+            Resource:
+              - 'arn:aws:s3:::aws-glue-*'
+          - Effect: Allow
+            Action:
+              - 's3:GetObject'
+              - 's3:PutObject'
+              - 's3:DeleteObject'
+            Resource:
+              - 'arn:aws:s3:::aws-glue-*'
+          - Effect: Allow
+            Action:
+              - 's3:GetObject'
+            Resource:
+              - 'arn:aws:s3:::crawler-public*'
+              - 'arn:aws:s3:::aws-glue-*'
+          - Effect: Allow
+            Action:
+              - 's3:*'
+            Resource:
+              - !Sub
+                - 'arn:aws:s3:::aws-athena-query-results-${accountid}-us-east-1/*'
+                - accountid: !Ref 'AWS::AccountId'
+              - !Sub
+                - 'arn:aws:s3:::aws-athena-query-results-${accountid}-us-east-1'
+                - accountid: !Ref 'AWS::AccountId'
+          - Effect: Allow
+            Action:
+              - 'cloudformation:CreateStack'
+              - 'cloudformation:DeleteStack'
+            Resource:
+              - !Sub
+                - 'arn:aws:cloudformation:us-east-1:${accountid}:stack/${tag}*'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+          - Action:
+              - 'iam:PassRole'
+            Effect: Allow
+            Resource:
+              - !Sub
+                - 'arn:aws:iam::${accountid}:role/AWSGlueServiceNotebookRole*'
+                - accountid: !Ref 'AWS::AccountId'
+            Condition:
+              StringLike:
+                'iam:PassedToService':
+                  - glue.amazonaws.com
+          - Action:
+              - 'iam:PassRole'
+            Effect: Allow
+            Resource:
+              - 'arn:aws:iam::*:role/service-role/AWSGlueServiceRole*'
+            Condition:
+              StringLike:
+                'iam:PassedToService':
+                  - glue.amazonaws.com
+      Roles:
+        - !Ref OfframpLoginRole
+        - !Ref SagemakerExecutionRole
+        - !Ref GlueExecutionRole
+        - !Ref CFNExecutionRole
+        - !Ref LambdaExecutionRole
+  CloudformationaccessPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub
+        - '${tag}-${env}-cloudformationaccess-policy'
+        - tag: !Ref OfframpTagName
+          env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+      Path: '/'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: cloudformationAccess
+            Effect: Allow
+            Action:
+              - 'cloudformation:Get*'
+              - 'cloudformation:Create*'
+              - 'cloudformation:Describe*'
+              - 'cloudformation:List*'
+              - 'cloudformation:Set*'
+              - 'cloudformation:Validate*'
+              - 'cloudformation:Stop*'
+              - 'cloudformation:Signal*'
+              - 'cloudformation:Execute*'
+              - 'cloudformation:Cancel*'
+              - 'cloudformation:Continue**'
+            Resource: '*'
+          - Sid: cloudformationDeleteAndUpdateAccess
+            Effect: Allow
+            Action:
+              - 'cloudformation:Delete*'
+              - 'cloudformation:Update*'
+            Resource:
+              - !Sub
+                - 'arn:aws:cloudformation:us-east-1:${accountid}:stack/${tag}*'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+              - !Sub
+                - 'arn:aws:cloudformation:us-east-1:${accountid}:stackset/${tag}*'
+                - accountid: !Ref 'AWS::AccountId'
+                  tag: !Ref OfframpTagName
+      Roles:
+        - !Ref OfframpLoginRole
+        - !Ref CFNExecutionRole
+        - !Ref LambdaExecutionRole
+  ApigatewayadminPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub
+        - '${tag}-${env}-apigatewayadmin-policy'
+        - tag: !Ref OfframpTagName
+          env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+      Path: '/'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: apigatewayadmin
+            Effect: Allow
+            Action:
+              - 'apigateway:GET'
+              - 'apigateway:POST'
+              - 'apigateway:PUT'
+              - 'apigateway:PATCH'
+              - 'apigateway:HEAD'
+              - 'apigateway:OPTIONS'
+            Resource: 'arn:aws:apigateway:us-east-1::/*'
+      Roles:
+        - !Ref OfframpLoginRole
+        - !Ref APIGatewayExecutionRole
+        - !Ref CFNExecutionRole
+        - !Ref LambdaExecutionRole
+  ApigatewayaccessPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub
+        - '${tag}-${env}-apigatewayaccess-policy'
+        - tag: !Ref OfframpTagName
+          env: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Environment]
+      Path: '/'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: apigatewayaccess
+            Effect: Allow
+            Action:
+              - 'execute-api:Invoke'
+              - 'execute-api:ManageConnections'
+            Resource: 'arn:aws:execute-api:us-east-1:*'
+      Roles:
+        - !Ref OfframpLoginRole
+        - !Ref APIGatewayExecutionRole
+        - !Ref CFNExecutionRole
+  AutoTagResourceLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", jarS3bucket]
+        S3Key: 'code/auto-tag-resources.zip'
+      Description: >-
+        Lambda to automatically tag resources such as EC2, Lambda, Glue, Sagemaker when created by an offramp role
+      Environment:
+        Variables:
+          ACCOUNTID: !Ref 'AWS::AccountId'
+          MONIKER: !FindInMap [AccountIDtoEnvParametersMap, !Ref "AWS::AccountId", Moniker]
+          REGION: !Ref "AWS::Region"
+          TEAM: !Ref Team
+      Handler: auto-tag-resources.lambda_handler
+      MemorySize: 512
+      Runtime: python3.6
+      Timeout: 300
+      Role: !GetAtt
+        - AutoTagResourceLambdaExecutionRole
+        - Arn
+  AutoTagResourceLambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: InlineAllowCreateTags
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:CreateTags'
+                  - 'ec2:DescribeTags'
+                  - 'glue:TagResource'
+                  - 'lambda:TagResource'
+                  - 'sagemaker:AddTags'
+                  - 'ssm:AddTagsToResource'
+                Resource:
+                  - '*'
+        - PolicyName: InlineSsmAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ssm:GetParameter'
+                  - 'ssm:GetParameters'
+                Resource:
+                  - '*'
+  ResourceCreationCloudWatchTrigger:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Gets triggered when EC2, Lambda, Glue, Sagemaker resource gets created by offramp rule
+      EventPattern:
+        detail:
+          eventSource:
+            - ec2.amazonaws.com
+            - glue.amazonaws.com
+            - lambda.amazonaws.com
+            - sagemaker.amazonaws.com
+            - ssm.amazonaws.com
+          eventName:
+            - RunInstances
+            - CreateJob
+            - CreateCrawler
+            - CreateTrigger
+            - CreateFunction20150331
+            - CreateNotebookInstance
+            - CreateTrainingJob
+            - CreateModel
+            - CreateEndpoint
+            - CreateEndpointConfig
+            - CreateHyperParameterTuningJob
+            - CreateNotebookInstanceLifecycleConfig
+            - PutParameter
+          userIdentity:
+            sessionContext:
+              sessionIssuer:
+                arn:
+                  - !Sub
+                    - '${role}'
+                    - role: !GetAtt
+                        - OfframpLoginRole
+                        - Arn
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt
+            - AutoTagResourceLambda
+            - Arn
+          Id: AutoTagResourceLambda
+  AutoTagResourceLambdaInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !Ref AutoTagResourceLambda
+      Action: 'lambda:InvokeFunction'
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt
+        - ResourceCreationCloudWatchTrigger
+        - Arn

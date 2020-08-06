@@ -1,0 +1,12 @@
+Mappings:
+  AccountIDtoEnvParametersMap:
+    '058234065395-FromWFO1':
+      SSHsecuritygroup: sg-xxxxxxx
+      Environment: dev
+      Moniker: ADPOFRMP-D-UE1
+      jarS3bucket: 'com.autodesk.adp.dev.us-east-1.blk'
+Resources:
+  Resource1FromExtension:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: 'NameBucket-WFO-Extension'
